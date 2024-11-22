@@ -1,4 +1,4 @@
-import test from 'ava'
+import { expect, test } from 'vitest'
 
 import { NotionAPI } from './notion-api'
 
@@ -25,18 +25,24 @@ const pageIdFixturesFailure = [
 ]
 
 for (const pageId of pageIdFixturesSuccess) {
-  test(`NotionAPI.getPage success ${pageId}`, async (t) => {
-    const api = new NotionAPI()
-    const page = await api.getPage(pageId)
+  test(
+    `NotionAPI.getPage success ${pageId}`,
+    {
+      timeout: 60_000 // one minute timeout
+    },
+    async () => {
+      const api = new NotionAPI()
+      const page = await api.getPage(pageId)
 
-    t.truthy(page)
-    t.truthy(page.block)
-  })
+      expect(page).toBeTruthy()
+      expect(page.block).toBeTruthy()
+    }
+  )
 }
 
 for (const pageId of pageIdFixturesFailure) {
-  test(`NotionAPI.getPage failure ${pageId}`, async (t) => {
+  test(`NotionAPI.getPage failure ${pageId}`, async () => {
     const api = new NotionAPI()
-    await t.throwsAsync(() => api.getPage(pageId))
+    await expect(() => api.getPage(pageId)).rejects.toThrow()
   })
 }

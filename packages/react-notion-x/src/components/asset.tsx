@@ -1,13 +1,16 @@
-import React from 'react'
-import { BaseContentBlock, Block } from 'notion-types'
+import type * as React from 'react'
+import { type BaseContentBlock, type Block } from 'notion-types'
 import { getTextContent } from 'notion-utils'
 
 import { useNotionContext } from '../context'
+import { getUrlParams, getYoutubeId } from '../utils'
 import { LazyImage } from './lazy-image'
+import { LiteYouTubeEmbed } from './lite-youtube-embed'
 
 const isServer = typeof window === 'undefined'
 
-const types = [
+const supportedAssetTypes = new Set([
+  'replit',
   'video',
   'image',
   'embed',
@@ -20,15 +23,20 @@ const types = [
   'gist',
   'codepen',
   'drive'
-]
+])
 
-export const Asset: React.FC<{
+export function Asset({
+  block,
+  zoomable = true,
+  children
+}: {
   block: BaseContentBlock
   children: any
-}> = ({ block, children }) => {
+  zoomable?: boolean
+}) {
   const { recordMap, mapImageUrl, components } = useNotionContext()
 
-  if (!block || !types.includes(block.type)) {
+  if (!block || !supportedAssetTypes.has(block.type)) {
     return null
   }
 
@@ -62,8 +70,15 @@ export const Asset: React.FC<{
         style.width = '100%'
       }
 
-      if (block_aspect_ratio && block.type !== 'image') {
-        // console.log(block.type, block)
+      if (block.type === 'video') {
+        if (block_height) {
+          style.height = block_height
+        } else if (block_aspect_ratio) {
+          style.paddingBottom = `${block_aspect_ratio * 100}%`
+        } else if (block_preserve_scale) {
+          style.objectFit = 'contain'
+        }
+      } else if (block_aspect_ratio && block.type !== 'image') {
         style.paddingBottom = `${block_aspect_ratio * 100}%`
       } else if (block_height) {
         style.height = block_height
@@ -77,6 +92,20 @@ export const Asset: React.FC<{
         }
       }
     } else {
+      switch (block.format?.block_alignment) {
+        case 'center':
+          style.alignSelf = 'center'
+          break
+
+        case 'left':
+          style.alignSelf = 'start'
+          break
+
+        case 'right':
+          style.alignSelf = 'end'
+          break
+      }
+
       if (block_width) {
         style.width = block_width
       }
@@ -98,14 +127,26 @@ export const Asset: React.FC<{
     }
   }
 
-  const source = block.properties?.source?.[0]?.[0]
+  let source =
+    recordMap.signed_urls?.[block.id] || block.properties?.source?.[0]?.[0]
+
+  if (!source) {
+    return null
+  }
+
+  if (block.space_id) {
+    const url = new URL(source)
+    url.searchParams.set('spaceId', block.space_id)
+    source = url.toString()
+  }
+
   let content = null
 
   if (block.type === 'tweet') {
     const src = source
     if (!src) return null
 
-    const id = src.split('?')[0].split('/').pop()
+    const id = src.split('?')?.[0]?.split('/').pop()
     if (!id) return null
 
     content = (
@@ -118,20 +159,21 @@ export const Asset: React.FC<{
           marginRight: 'auto'
         }}
       >
-        <components.tweet id={id} />
+        <components.Tweet id={id} />
       </div>
     )
   } else if (block.type === 'pdf') {
     style.overflow = 'auto'
-    style.padding = '8px 16px'
     style.background = 'rgb(226, 226, 226)'
+    style.display = 'block'
+
+    if (!style.padding) {
+      style.padding = '8px 16px'
+    }
 
     if (!isServer) {
-      const signedUrl = recordMap.signed_urls?.[block.id]
-      if (!signedUrl) return null
       // console.log('pdf', block, signedUrl)
-
-      content = <components.pdf file={signedUrl} />
+      content = <components.Pdf file={source} />
     }
   } else if (
     block.type === 'embed' ||
@@ -142,40 +184,56 @@ export const Asset: React.FC<{
     block.type === 'maps' ||
     block.type === 'excalidraw' ||
     block.type === 'codepen' ||
-    block.type === 'drive'
+    block.type === 'drive' ||
+    block.type === 'replit'
   ) {
-    const signedUrl = recordMap.signed_urls[block.id]
-
     if (
       block.type === 'video' &&
-      signedUrl &&
-      signedUrl.indexOf('youtube') < 0 &&
-      signedUrl.indexOf('youtu.be') < 0 &&
-      signedUrl.indexOf('vimeo') < 0 &&
-      signedUrl.indexOf('wistia') < 0 &&
-      signedUrl.indexOf('loom') < 0 &&
-      signedUrl.indexOf('videoask') < 0 &&
-      signedUrl.indexOf('getcloudapp') < 0
+      source &&
+      !source.includes('youtube') &&
+      !source.includes('youtu.be') &&
+      !source.includes('vimeo') &&
+      !source.includes('wistia') &&
+      !source.includes('loom') &&
+      !source.includes('videoask') &&
+      !source.includes('getcloudapp') &&
+      !source.includes('tella')
     ) {
+      style.paddingBottom = undefined
+
       content = (
         <video
           playsInline
           controls
           preload='metadata'
           style={assetStyle}
-          src={signedUrl}
+          src={source}
           title={block.type}
         />
       )
     } else {
-      let src = block.format?.display_source ?? source
+      let src = block.format?.display_source || source
 
       if (src) {
-        if (block.type === 'gist' && !src.endsWith('.pibb')) {
-          src = `${src}.pibb`
-        }
+        const youtubeVideoId: string | null =
+          block.type === 'video' ? getYoutubeId(src) : null
+        // console.log({ youtubeVideoId, src, format: block.format, style })
 
-        if (block.type === 'gist') {
+        if (youtubeVideoId) {
+          const params = getUrlParams(src)
+          content = (
+            <LiteYouTubeEmbed
+              id={youtubeVideoId}
+              style={assetStyle}
+              className='notion-asset-object-fit'
+              params={params}
+            />
+          )
+        } else if (block.type === 'gist') {
+          if (!src.endsWith('.pibb')) {
+            src = `${src}.pibb`
+          }
+
           assetStyle.width = '100%'
           style.paddingBottom = '50%'
 
@@ -195,6 +253,8 @@ export const Asset: React.FC<{
             />
           )
         } else {
+          src += block.type === 'typeform' ? '&disable-auto-focus=true' : ''
+
           content = (
             <iframe
               className='notion-asset-object-fit'
@@ -207,6 +267,7 @@ export const Asset: React.FC<{
               allowFullScreen
               // this is important for perf but react's TS definitions don't seem to like it
               loading='lazy'
+              scrolling='auto'
             />
           )
         }
@@ -214,9 +275,11 @@ export const Asset: React.FC<{
     }
   } else if (block.type === 'image') {
     // console.log('image', block)
-
-    const signedUrl = recordMap.signed_urls?.[block.id]
-    const src = mapImageUrl(signedUrl || source, block as Block)
+    //kind of a hack for now. New file.notion.so images aren't signed correctly
+    if (source.includes('file.notion.so')) {
+      source = block.properties?.source?.[0]?.[0]
+    }
+    const src = mapImageUrl(source, block as Block)
     const caption = getTextContent(block.properties?.caption)
     const alt = caption || 'notion image'
 
@@ -224,7 +287,7 @@ export const Asset: React.FC<{
       <LazyImage
         src={src}
         alt={alt}
-        zoomable={true}
+        zoomable={zoomable}
         height={style.height as number}
         style={assetStyle}
       />

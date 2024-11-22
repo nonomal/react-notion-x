@@ -1,4 +1,4 @@
-import React from 'react'
+import type * as React from 'react'
 
 function SvgTypeMultiSelect(props: React.SVGProps<SVGSVGElement>) {
   return (

@@ -1,4 +1,10 @@
-import { Block, PageBlock, ExtendedRecordMap } from 'notion-types'
+import {
+  type Block,
+  type ExtendedRecordMap,
+  type PageBlock
+} from 'notion-types'
+
+import { getBlockCollectionId } from './get-block-collection-id'
 
 export function getBlockIcon(block: Block, recordMap: ExtendedRecordMap) {
   if ((block as PageBlock).format?.page_icon) {
@@ -9,10 +15,13 @@ export function getBlockIcon(block: Block, recordMap: ExtendedRecordMap) {
     block.type === 'collection_view_page' ||
     block.type === 'collection_view'
   ) {
-    const collection = recordMap.collection[block.collection_id]?.value
+    const collectionId = getBlockCollectionId(block, recordMap)
+    if (collectionId) {
+      const collection = recordMap.collection[collectionId]?.value
 
-    if (collection) {
-      return collection.icon
+      if (collection) {
+        return collection.icon
+      }
     }
   }
 

@@ -1,26 +1,34 @@
-import React from 'react'
-import { BaseContentBlock, Block } from 'notion-types'
-import { Asset } from './asset'
-import { cs } from '../utils'
-import { Text } from './text'
-import { useNotionContext } from '..'
+import type * as React from 'react'
+import { type BaseContentBlock, type Block } from 'notion-types'
 import { parsePageId } from 'notion-utils'
 
-export const AssetWrapper: React.FC<{
+import { useNotionContext } from '..'
+import { cs } from '../utils'
+import { Asset } from './asset'
+import { Text } from './text'
+
+const urlStyle = { width: '100%' }
+
+export function AssetWrapper({
+  blockId,
+  block
+}: {
   blockId: string
   block: Block
-}> = ({ blockId, block }) => {
+}) {
   const value = block as BaseContentBlock
-  const { components, mapPageUrl, rootDomain } = useNotionContext()
+  const { components, mapPageUrl, rootDomain, zoom } = useNotionContext()
 
   let isURL = false
-  if (value?.properties?.caption?.length > 0) {
-    const caption: string = value?.properties?.caption[0][0]
-    const id = parsePageId(caption, { uuid: true })
+  if (block.type === 'image') {
+    const caption: string | undefined = value?.properties?.caption?.[0]?.[0]
+    if (caption) {
+      const id = parsePageId(caption, { uuid: true })
 
-    const isPage = caption.charAt(0) === '/' && id
-    if ((block.type == 'image' && validURL(caption)) || isPage) {
-      isURL = true
+      const isPage = caption.charAt(0) === '/' && id
+      if (isPage || isValidURL(caption)) {
+        isURL = true
+      }
     }
   }
 
@@ -33,7 +41,7 @@ export const AssetWrapper: React.FC<{
         blockId
       )}
     >
-      <Asset block={value}>
+      <Asset block={value} zoomable={zoom && !isURL}>
         {value?.properties?.caption && !isURL && (
           <figcaption className='notion-asset-caption'>
             <Text value={value.properties.caption} block={block} />
@@ -45,33 +53,34 @@ export const AssetWrapper: React.FC<{
 
   // allows for an image to be a link
   if (isURL) {
-    const caption: string = value?.properties?.caption[0][0]
+    const caption: string | undefined = value?.properties?.caption?.[0]?.[0]
     const id = parsePageId(caption, { uuid: true })
-    const isPage = caption.charAt(0) === '/' && id
+    const isPage = caption?.charAt(0) === '/' && id
     const captionHostname = extractHostname(caption)
 
     return (
-      <components.pageLink
-        style={{ width: '100%' }}
+      <components.PageLink
+        style={urlStyle}
         href={isPage ? mapPageUrl(id) : caption}
         target={
           captionHostname &&
           captionHostname !== rootDomain &&
-          !caption.startsWith('/')
+          !caption?.startsWith('/')
             ? 'blank_'
             : null
         }
       >
         {figure}
-      </components.pageLink>
+      </components.PageLink>
     )
   }
 
-  return <>{figure}</>
+  return figure
 }
 
-function validURL(str) {
-  var pattern = new RegExp(
+function isValidURL(str: string) {
+  // TODO: replace this with a more well-tested package
+  const pattern = new RegExp(
     '^(https?:\\/\\/)?' + // protocol
       '((([a-z\\d]([a-z\\d-]*[a-z\\d])*)\\.)+[a-z]{2,}|' + // domain name
       '((\\d{1,3}\\.){3}\\d{1,3}))' + // OR ip (v4) address
@@ -79,15 +88,15 @@ function validURL(str) {
       '(\\?[;&a-z\\d%_.~+=-]*)?' + // query string
       '(\\#[-a-z\\d_]*)?$',
     'i'
-  ) // fragment locator
+  )
   return !!pattern.test(str)
 }
 
-function extractHostname(url) {
+function extractHostname(url?: string) {
   try {
-    var hostname = new URL(url).hostname
+    const hostname = new URL(url!).hostname
     return hostname
-  } catch (err) {
+  } catch {
     return ''
   }
 }

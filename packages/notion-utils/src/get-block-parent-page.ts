@@ -1,4 +1,4 @@
-import * as types from 'notion-types'
+import type * as types from 'notion-types'
 
 /**
  * Returns the parent page block containing a given page.
@@ -8,13 +8,26 @@ import * as types from 'notion-types'
  */
 export const getBlockParentPage = (
   block: types.Block,
-  recordMap: types.ExtendedRecordMap
+  recordMap: types.ExtendedRecordMap,
+  {
+    inclusive = false
+  }: {
+    inclusive?: boolean
+  } = {}
 ): types.PageBlock | null => {
-  let currentRecord: types.Block | types.Collection = block
+  let currentRecord: types.Block | types.Collection | undefined = block
 
-  while (currentRecord != null) {
+  while (currentRecord) {
+    if (inclusive && (currentRecord as types.Block)?.type === 'page') {
+      return currentRecord as types.PageBlock
+    }
+
     const parentId: string = currentRecord.parent_id
     const parentTable = currentRecord.parent_table
+
+    if (!parentId) {
+      break
+    }
 
     if (parentTable === 'collection') {
       currentRecord = recordMap.collection[parentId]?.value
