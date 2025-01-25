@@ -1,43 +1,77 @@
-import * as types from 'notion-types'
-import React from 'react'
+import type * as types from 'notion-types'
+import type * as React from 'react'
 
-export type MapPageUrl = (
+export type MapPageUrlFn = (
   pageId: string,
   recordMap?: types.ExtendedRecordMap | undefined
 ) => string
-export type MapImageUrl = (url: string, block: types.Block) => string
-export type SearchNotion = (
+export type MapImageUrlFn = (
+  url: string | undefined,
+  block: types.Block
+) => string | undefined
+export type SearchNotionFn = (
   params: types.SearchParams
 ) => Promise<types.SearchResults>
 
+export type ComponentOverrideFn = (
+  props: any,
+  defaultValueFn: () => React.ReactNode
+) => any
+
 export interface NotionComponents {
   // TODO: better typing for arbitrary react components
-  image: any
-  link: any
-  pageLink: any
-  checkbox: React.FC<{ isChecked: boolean; blockId: string }>
+  Image: any
+  Link: any
+  PageLink: any
+  Checkbox: React.FC<{ isChecked: boolean; blockId?: string }>
 
   // blocks
-  code: any
-  equation: any
-  callout?: any
+  Code: any
+  Equation: any
+  Callout?: any
 
   // collection
-  collection: any
-  collectionRow: any
+  Collection: any
+  Property?: any
+
+  propertyTextValue: ComponentOverrideFn
+  propertySelectValue: ComponentOverrideFn
+  propertyRelationValue: ComponentOverrideFn
+  propertyFormulaValue: ComponentOverrideFn
+  propertyTitleValue: ComponentOverrideFn
+  propertyPersonValue: ComponentOverrideFn
+  propertyFileValue: ComponentOverrideFn
+  propertyCheckboxValue: ComponentOverrideFn
+  propertyUrlValue: ComponentOverrideFn
+  propertyEmailValue: ComponentOverrideFn
+  propertyPhoneNumberValue: ComponentOverrideFn
+  propertyNumberValue: ComponentOverrideFn
+  propertyLastEditedTimeValue: ComponentOverrideFn
+  propertyCreatedTimeValue: ComponentOverrideFn
+  propertyDateValue: ComponentOverrideFn
+  propertyAutoIncrementIdValue: ComponentOverrideFn
 
   // assets
-  pdf: any
-  tweet: any
-  modal: any
+  Pdf: any
+  Tweet: any
+  Modal: any
+  Embed: any
+
+  // page navigation
+  Header: any
+
+  // optional next.js-specific overrides
+  nextImage?: any
+  nextLegacyImage?: any
+  nextLink?: any
 }
 
 export interface CollectionViewProps {
   collection: types.Collection
   collectionView: types.CollectionView
   collectionData: types.CollectionQueryResult
-  padding: number
-  width: number
+  padding?: number
+  width?: number
 }
 
 export interface CollectionCardProps {

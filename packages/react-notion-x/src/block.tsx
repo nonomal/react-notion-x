@@ -1,31 +1,29 @@
-import React from 'react'
-import throttle from 'lodash.throttle'
+/* eslint-disable @typescript-eslint/naming-convention */
+import type * as types from 'notion-types'
 import {
+  getBlockCollectionId,
   getBlockIcon,
-  getBlockTitle,
-  getTextContent,
-  getPageTableOfContents,
   getBlockParentPage,
+  getPageTableOfContents,
+  getTextContent,
   uuidToId
 } from 'notion-utils'
-import * as types from 'notion-types'
+import * as React from 'react'
 
+import { AssetWrapper } from './components/asset-wrapper'
+import { Audio } from './components/audio'
+import { EOI } from './components/eoi'
+import { File } from './components/file'
+import { GoogleDrive } from './components/google-drive'
+import { LazyImage } from './components/lazy-image'
+import { PageAside } from './components/page-aside'
 import { PageIcon } from './components/page-icon'
 import { PageTitle } from './components/page-title'
-import { LinkIcon } from './icons/link-icon'
-import { Header } from './components/header'
-import { GoogleDrive } from './components/google-drive'
-import { Audio } from './components/audio'
-import { File } from './components/file'
-import { Equation } from './components/equation'
-import { GracefulImage } from './components/graceful-image'
-import { LazyImage } from './components/lazy-image'
-import { useNotionContext } from './context'
-import { cs, getListNumber, isUrl } from './utils'
-import { Text } from './components/text'
 import { SyncPointerBlock } from './components/sync-pointer-block'
-import { AssetWrapper } from './components/asset-wrapper'
-import { ExternalComponentGithub } from './components/external-component-github'
+import { Text } from './components/text'
+import { useNotionContext } from './context'
+import { LinkIcon } from './icons/link-icon'
+import { cs, getListNumber, isUrl } from './utils'
 
 interface BlockProps {
   block: types.Block
@@ -34,22 +32,29 @@ interface BlockProps {
   className?: string
   bodyClassName?: string
 
-  header?: React.ElementType
+  header?: React.ReactNode
   footer?: React.ReactNode
   pageHeader?: React.ReactNode
   pageFooter?: React.ReactNode
+  pageTitle?: React.ReactNode
   pageAside?: React.ReactNode
   pageCover?: React.ReactNode
 
   hideBlockId?: boolean
   disableHeader?: boolean
+
+  children?: React.ReactNode
 }
 
+// TODO: use react state instead of a global for this
 const tocIndentLevelCache: {
   [blockId: string]: number
 } = {}
 
-export const Block: React.FC<BlockProps> = (props) => {
+const pageCoverStyleCache: Record<string, object> = {}
+
+export function Block(props: BlockProps) {
+  const ctx = useNotionContext()
   const {
     components,
     fullPage,
@@ -62,7 +67,9 @@ export const Block: React.FC<BlockProps> = (props) => {
     defaultPageIcon,
     defaultPageCover,
     defaultPageCoverPosition
-  } = useNotionContext()
+  } = ctx
+
+  const [activeSection, setActiveSection] = React.useState<string | null>(null)
 
   const {
     block,
@@ -74,6 +81,7 @@ export const Block: React.FC<BlockProps> = (props) => {
     footer,
     pageHeader,
     pageFooter,
+    pageTitle,
     pageAside,
     pageCover,
     hideBlockId,
@@ -112,10 +120,20 @@ export const Block: React.FC<BlockProps> = (props) => {
             block.type === 'page'
               ? block.properties
               : {
-                  title: recordMap.collection[block.collection_id]?.value?.name
+                  title:
+                    recordMap.collection[
+                      getBlockCollectionId(block, recordMap)!
+                    ]?.value?.name
                 }
 
           const coverPosition = (1 - (page_cover_position || 0.5)) * 100
+          const pageCoverObjectPosition = `center ${coverPosition}%`
+          let pageCoverStyle = pageCoverStyleCache[pageCoverObjectPosition]
+          if (!pageCoverStyle) {
+            pageCoverStyle = pageCoverStyleCache[pageCoverObjectPosition] = {
+              objectPosition: pageCoverObjectPosition
+            }
+          }
 
           const pageIcon = getBlockIcon(block, recordMap) ?? defaultPageIcon
           const isPageIconUrl = pageIcon && isUrl(pageIcon)
@@ -127,60 +145,8 @@ export const Block: React.FC<BlockProps> = (props) => {
 
           const hasToc =
             showTableOfContents && toc.length >= minTableOfContentsItems
-          const hasAside = (hasToc || pageAside) && !page_full_width
-
-          const [activeSection, setActiveSection] = React.useState(null)
-
-          const throttleMs = 100
-
-          // this scrollspy logic was originally based on
-          // https://github.com/Purii/react-use-scrollspy
-          const actionSectionScrollSpy = throttle(() => {
-            const sections = document.getElementsByClassName('notion-h')
-
-            let prevBBox: DOMRect = null
-            let currentSectionId = activeSection
-
-            for (let i = 0; i < sections.length; ++i) {
-              const section = sections[i]
-              if (!section || !(section instanceof Element)) continue
-
-              if (!currentSectionId) {
-                currentSectionId = section.getAttribute('data-id')
-              }
-
-              const bbox = section.getBoundingClientRect()
-              const prevHeight = prevBBox ? bbox.top - prevBBox.bottom : 0
-              const offset = Math.max(150, prevHeight / 4)
-
-              // GetBoundingClientRect returns values relative to viewport
-              if (bbox.top - offset < 0) {
-                currentSectionId = section.getAttribute('data-id')
-
-                prevBBox = bbox
-                continue
-              }
-
-              // No need to continue loop, if last element has been detected
-              break
-            }
-
-            setActiveSection(currentSectionId)
-          }, throttleMs)
-
-          if (hasToc) {
-            React.useEffect(() => {
-              window.addEventListener('scroll', actionSectionScrollSpy)
-
-              actionSectionScrollSpy()
-
-              return () => {
-                window.removeEventListener('scroll', actionSectionScrollSpy)
-              }
-            }, [])
-          }
-
-          const hasPageCover = pageCover || page_cover
+          const hasAside = !!((hasToc || pageAside) && !page_full_width)
+          const hasPageCover = !!(pageCover || page_cover)
 
           return (
             <div
@@ -195,26 +161,22 @@ export const Block: React.FC<BlockProps> = (props) => {
               <div className='notion-viewport' />
 
               <div className='notion-frame'>
-                {!disableHeader && <Header header={header} />}
+                {!disableHeader && <components.Header block={block} />}
+                {header}
 
                 <div className='notion-page-scroller'>
-                  {hasPageCover ? (
-                    pageCover ? (
-                      pageCover
-                    ) : (
+                  {hasPageCover &&
+                    (pageCover ?? (
                       <div className='notion-page-cover-wrapper'>
                         <LazyImage
-                          src={mapImageUrl(page_cover, block)}
+                          src={mapImageUrl(page_cover!, block)}
                           alt={getTextContent(properties?.title)}
                           priority={true}
                           className='notion-page-cover'
-                          style={{
-                            objectPosition: `center ${coverPosition}%`
-                          }}
+                          style={pageCoverStyle}
                         />
                       </div>
-                    )
-                  ) : null}
+                    ))}
 
                   <main
                     className={cs(
@@ -235,85 +197,51 @@ export const Block: React.FC<BlockProps> = (props) => {
                     )}
                   >
                     {page_icon && (
-                      <div className='notion-page-icon-wrapper'>
-                        <PageIcon block={block} defaultIcon={defaultPageIcon} />
-                      </div>
+                      <PageIcon
+                        block={block}
+                        defaultIcon={defaultPageIcon}
+                        inline={false}
+                      />
                     )}
 
                     {pageHeader}
 
                     <h1 className='notion-title'>
-                      <Text value={properties?.title} block={block} />
+                      {pageTitle ?? (
+                        <Text value={properties?.title} block={block} />
+                      )}
                     </h1>
 
-                    {block.type === 'page' &&
-                      block.parent_table === 'collection' && (
-                        <components.collectionRow block={block} />
-                      )}
-
-                    {block.type === 'collection_view_page' && (
-                      <components.collection block={block} />
+                    {(block.type === 'collection_view_page' ||
+                      (block.type === 'page' &&
+                        block.parent_table === 'collection')) && (
+                      <components.Collection block={block} ctx={ctx} />
                     )}
 
-                    <div
-                      className={cs(
-                        'notion-page-content',
-                        hasAside && 'notion-page-content-has-aside',
-                        hasToc && 'notion-page-content-has-toc'
-                      )}
-                    >
-                      <article className='notion-page-content-inner'>
-                        {children}
-                      </article>
+                    {block.type !== 'collection_view_page' && (
+                      <div
+                        className={cs(
+                          'notion-page-content',
+                          hasAside && 'notion-page-content-has-aside',
+                          hasToc && 'notion-page-content-has-toc'
+                        )}
+                      >
+                        <article className='notion-page-content-inner'>
+                          {children}
+                        </article>
 
-                      {hasAside && (
-                        <aside className='notion-aside'>
-                          {hasToc && (
-                            <div className='notion-aside-table-of-contents'>
-                              <div className='notion-aside-table-of-contents-header'>
-                                Table of Contents
-                              </div>
-
-                              <nav
-                                className={cs(
-                                  'notion-table-of-contents',
-                                  !darkMode && 'notion-gray'
-                                )}
-                              >
-                                {toc.map((tocItem) => {
-                                  const id = uuidToId(tocItem.id)
-
-                                  return (
-                                    <a
-                                      key={id}
-                                      href={`#${id}`}
-                                      className={cs(
-                                        'notion-table-of-contents-item',
-                                        `notion-table-of-contents-item-indent-level-${tocItem.indentLevel}`,
-                                        activeSection === id &&
-                                          'notion-table-of-contents-active-item'
-                                      )}
-                                    >
-                                      <span
-                                        className='notion-table-of-contents-item-body'
-                                        style={{
-                                          display: 'inline-block',
-                                          marginLeft: tocItem.indentLevel * 16
-                                        }}
-                                      >
-                                        {tocItem.text}
-                                      </span>
-                                    </a>
-                                  )
-                                })}
-                              </nav>
-                            </div>
-                          )}
-
-                          {pageAside}
-                        </aside>
-                      )}
-                    </div>
+                        {hasAside && (
+                          <PageAside
+                            toc={toc}
+                            activeSection={activeSection}
+                            setActiveSection={setActiveSection}
+                            hasToc={hasToc}
+                            hasAside={hasAside}
+                            pageAside={pageAside}
+                          />
+                        )}
+                      </div>
+                    )}
 
                     {pageFooter}
                   </main>
@@ -341,15 +269,13 @@ export const Block: React.FC<BlockProps> = (props) => {
 
               {pageHeader}
 
-              {block.type === 'page' && block.parent_table === 'collection' && (
-                <components.collectionRow block={block} />
+              {(block.type === 'collection_view_page' ||
+                (block.type === 'page' &&
+                  block.parent_table === 'collection')) && (
+                <components.Collection block={block} ctx={ctx} />
               )}
 
-              {block.type === 'collection_view_page' && (
-                <components.collection block={block} />
-              )}
-
-              {children}
+              {block.type !== 'collection_view_page' && children}
 
               {pageFooter}
             </main>
@@ -359,7 +285,7 @@ export const Block: React.FC<BlockProps> = (props) => {
         const blockColor = block.format?.block_color
 
         return (
-          <components.pageLink
+          <components.PageLink
             className={cs(
               'notion-page-link',
               blockColor && `notion-${blockColor}`,
@@ -368,7 +294,7 @@ export const Block: React.FC<BlockProps> = (props) => {
             href={mapPageUrl(block.id)}
           >
             <PageTitle block={block} />
-          </components.pageLink>
+          </components.PageLink>
         )
       }
 
@@ -386,7 +312,7 @@ export const Block: React.FC<BlockProps> = (props) => {
 
       // we use a cache here because constructing the ToC is non-trivial
       let indentLevel = tocIndentLevelCache[block.id]
-      let indentLevelClass: string
+      let indentLevelClass: string | undefined
 
       if (indentLevel === undefined) {
         const page = getBlockParentPage(block, recordMap)
@@ -433,11 +359,8 @@ export const Block: React.FC<BlockProps> = (props) => {
           </span>
         </span>
       )
-      let headerBlock = (
-        <h4 className={classNameStr} data-id={id}>
-          {innerHeader}
-        </h4>
-      )
+      let headerBlock = null
+
       //page title takes the h1 so all header blocks are greater
       if (isH1) {
         headerBlock = (
@@ -450,6 +373,12 @@ export const Block: React.FC<BlockProps> = (props) => {
           <h3 className={classNameStr} data-id={id}>
             {innerHeader}
           </h3>
+        )
+      } else {
+        headerBlock = (
+          <h4 className={classNameStr} data-id={id}>
+            {innerHeader}
+          </h4>
         )
       }
 
@@ -468,7 +397,7 @@ export const Block: React.FC<BlockProps> = (props) => {
     case 'divider':
       return <hr className={cs('notion-hr', blockId)} />
 
-    case 'text':
+    case 'text': {
       if (!block.properties && !block.content?.length) {
         return <div className={cs('notion-blank', blockId)}>&nbsp;</div>
       }
@@ -490,10 +419,11 @@ export const Block: React.FC<BlockProps> = (props) => {
           {children && <div className='notion-text-children'>{children}</div>}
         </div>
       )
+    }
 
     case 'bulleted_list':
     // fallthrough
-    case 'numbered_list':
+    case 'numbered_list': {
       const wrapList = (content: React.ReactNode, start?: number) =>
         block.type === 'bulleted_list' ? (
           <ul className={cs('notion-list', 'notion-list-disc', blockId)}>
@@ -534,7 +464,12 @@ export const Block: React.FC<BlockProps> = (props) => {
       const start = getListNumber(block.id, recordMap.block)
 
       return isTopLevel ? wrapList(output, start) : output
+    }
 
+    case 'embed':
+      return <components.Embed blockId={blockId} block={block} />
+    case 'replit':
+    // fallthrough
     case 'tweet':
     // fallthrough
     case 'maps':
@@ -553,12 +488,10 @@ export const Block: React.FC<BlockProps> = (props) => {
     // fallthrough
     case 'gist':
     // fallthrough
-    case 'embed':
-    // fallthrough
     case 'video':
       return <AssetWrapper blockId={blockId} block={block} />
 
-    case 'drive':
+    case 'drive': {
       const properties = block.format?.drive_properties
       if (!properties) {
         //check if this drive actually needs to be embeded ex. google sheets.
@@ -573,6 +506,7 @@ export const Block: React.FC<BlockProps> = (props) => {
           className={blockId}
         />
       )
+    }
 
     case 'audio':
       return <Audio block={block as types.AudioBlock} className={blockId} />
@@ -581,41 +515,21 @@ export const Block: React.FC<BlockProps> = (props) => {
       return <File block={block as types.FileBlock} className={blockId} />
 
     case 'equation':
-      const math = block.properties.title[0][0]
-      if (!math) return null
-      return <Equation math={math} block className={blockId} />
+      return (
+        <components.Equation
+          block={block as types.EquationBlock}
+          inline={false}
+          className={blockId}
+        />
+      )
 
-    case 'code': {
-      if (block.properties.title) {
-        const content = getBlockTitle(block, recordMap)
-        const language = block.properties.language
-          ? block.properties.language[0][0]
-          : ''
-        const caption = block.properties.caption
-
-        // TODO: add className
-        return (
-          <>
-            <components.code
-              key={block.id}
-              language={language || ''}
-              code={content}
-            />
-            {caption && (
-              <figcaption className='notion-asset-caption'>
-                <Text value={caption} block={block} />
-              </figcaption>
-            )}
-          </>
-        )
-      }
-      break
-    }
+    case 'code':
+      return <components.Code block={block as types.CodeBlock} />
 
     case 'column_list':
       return <div className={cs('notion-row', blockId)}>{children}</div>
 
-    case 'column':
+    case 'column': {
       // note: notion uses 46px
       const spacerWidth = `min(32px, 4vw)`
       const ratio = block.format?.column_ratio || 0.5
@@ -637,6 +551,7 @@ export const Block: React.FC<BlockProps> = (props) => {
           <div className='notion-spacer' />
         </>
       )
+    }
 
     case 'quote': {
       if (!block.properties) return null
@@ -651,17 +566,22 @@ export const Block: React.FC<BlockProps> = (props) => {
             blockId
           )}
         >
-          <Text value={block.properties.title} block={block} />
+          <div>
+            <Text value={block.properties.title} block={block} />
+          </div>
+          {children}
         </blockquote>
       )
     }
 
     case 'collection_view':
-      return <components.collection block={block} className={blockId} />
+      return (
+        <components.Collection block={block} className={blockId} ctx={ctx} />
+      )
 
     case 'callout':
-      if (components.callout) {
-        return <components.callout block={block} className={blockId} />
+      if (components.Callout) {
+        return <components.Callout block={block} className={blockId} />
       } else {
         return (
           <div
@@ -672,7 +592,7 @@ export const Block: React.FC<BlockProps> = (props) => {
               blockId
             )}
           >
-            <PageIcon block={block} />
+            <PageIcon block={block} hideDefaultIcon={true} />
 
             <div className='notion-callout-text'>
               <Text value={block.properties?.title} block={block} />
@@ -682,12 +602,15 @@ export const Block: React.FC<BlockProps> = (props) => {
         )
       }
 
-    case 'bookmark':
+    case 'bookmark': {
       if (!block.properties) return null
 
-      let title = getTextContent(block.properties?.title)
+      const link = block.properties.link
+      if (!link || !link[0]?.[0]) return null
+
+      let title = getTextContent(block.properties.title)
       if (!title) {
-        title = getTextContent(block.properties?.link)
+        title = getTextContent(link)
       }
 
       if (title) {
@@ -695,7 +618,7 @@ export const Block: React.FC<BlockProps> = (props) => {
           try {
             const url = new URL(title)
             title = url.hostname
-          } catch (err) {
+          } catch {
             // ignore invalid links
           }
         }
@@ -703,7 +626,7 @@ export const Block: React.FC<BlockProps> = (props) => {
 
       return (
         <div className='notion-row'>
-          <components.link
+          <components.Link
             target='_blank'
             rel='noopener noreferrer'
             className={cs(
@@ -711,7 +634,7 @@ export const Block: React.FC<BlockProps> = (props) => {
               block.format?.block_color && `notion-${block.format.block_color}`,
               blockId
             )}
-            href={block.properties.link[0][0]}
+            href={link[0][0]}
           >
             <div>
               {title && (
@@ -728,31 +651,35 @@ export const Block: React.FC<BlockProps> = (props) => {
 
               <div className='notion-bookmark-link'>
                 {block.format?.bookmark_icon && (
-                  <GracefulImage
-                    src={block.format?.bookmark_icon}
-                    alt={title}
-                    loading='lazy'
-                  />
+                  <div className='notion-bookmark-link-icon'>
+                    <LazyImage
+                      src={mapImageUrl(block.format?.bookmark_icon, block)}
+                      alt={title}
+                    />
+                  </div>
                 )}
 
-                <div>
-                  <Text value={block.properties?.link} block={block} />
+                <div className='notion-bookmark-link-text'>
+                  <Text value={link} block={block} />
                 </div>
               </div>
             </div>
 
             {block.format?.bookmark_cover && (
               <div className='notion-bookmark-image'>
-                <GracefulImage
-                  src={block.format?.bookmark_cover}
+                <LazyImage
+                  src={mapImageUrl(block.format?.bookmark_cover, block)}
                   alt={getTextContent(block.properties?.title)}
-                  loading='lazy'
+                  style={{
+                    objectFit: 'cover'
+                  }}
                 />
               </div>
             )}
-          </components.link>
+          </components.Link>
         </div>
       )
+    }
 
     case 'toggle':
       return (
@@ -801,13 +728,13 @@ export const Block: React.FC<BlockProps> = (props) => {
       )
     }
 
-    case 'to_do':
+    case 'to_do': {
       const isChecked = block.properties?.checked?.[0]?.[0] === 'Yes'
 
       return (
         <div className={cs('notion-to-do', blockId)}>
           <div className='notion-to-do-item'>
-            <components.checkbox blockId={blockId} isChecked={isChecked} />
+            <components.Checkbox blockId={blockId} isChecked={isChecked} />
 
             <div
               className={cs(
@@ -822,29 +749,31 @@ export const Block: React.FC<BlockProps> = (props) => {
           <div className='notion-to-do-children'>{children}</div>
         </div>
       )
+    }
 
     case 'transclusion_container':
       return <div className={cs('notion-sync-block', blockId)}>{children}</div>
 
     case 'transclusion_reference':
-      return <SyncPointerBlock block={block} level={level + 1} {...props} />
+      return <SyncPointerBlock {...props} level={level + 1} />
 
-    case 'alias':
+    case 'alias': {
       const blockPointerId = block?.format?.alias_pointer?.id
       const linkedBlock = recordMap.block[blockPointerId]?.value
       if (!linkedBlock) {
-        console.log('"p" missing block', blockPointerId)
+        console.log('"alias" missing block', blockPointerId)
         return null
       }
 
       return (
-        <components.pageLink
+        <components.PageLink
           className={cs('notion-page-link', blockPointerId)}
           href={mapPageUrl(blockPointerId)}
         >
           <PageTitle block={linkedBlock} />
-        </components.pageLink>
+        </components.PageLink>
       )
+    }
 
     case 'table':
       return (
@@ -852,33 +781,40 @@ export const Block: React.FC<BlockProps> = (props) => {
           <tbody>{children}</tbody>
         </table>
       )
-    case 'table_row':
+
+    case 'table_row': {
       const tableBlock = recordMap.block[block.parent_id]
-        .value as types.TableBlock
-      const order = tableBlock.format.table_block_column_order
-      const formatMap = tableBlock.format.table_block_column_format
+        ?.value as types.TableBlock
+      const order = tableBlock.format?.table_block_column_order
+      const formatMap = tableBlock.format?.table_block_column_format
+      const backgroundColor = block.format?.block_color
+
+      if (!tableBlock || !order) {
+        return null
+      }
 
       return (
-        <tr className={cs('notion-simple-table-row', blockId)}>
+        <tr
+          className={cs(
+            'notion-simple-table-row',
+            backgroundColor && `notion-${backgroundColor}`,
+            blockId
+          )}
+        >
           {order.map((column) => {
-            const color =
-              formatMap && formatMap[column] ? formatMap[column]?.color : null
+            const color = formatMap?.[column]?.color
+
             return (
               <td
                 key={column}
                 className={color ? `notion-${color}` : ''}
                 style={{
-                  width:
-                    formatMap && formatMap[column] && formatMap[column]?.width
-                      ? formatMap[column].width
-                      : 120
+                  width: formatMap?.[column]?.width || 120
                 }}
               >
                 <div className='notion-simple-table-cell'>
                   <Text
-                    value={
-                      block.properties ? block.properties[column] : [['ㅤ']]
-                    }
+                    value={block.properties?.[column] || [['ㅤ']]}
                     block={block}
                   />
                 </div>
@@ -887,39 +823,19 @@ export const Block: React.FC<BlockProps> = (props) => {
           })}
         </tr>
       )
+    }
 
     case 'external_object_instance':
-      switch (block.format?.domain) {
-        case 'github.com':
-          return (
-            <ExternalComponentGithub
-              original_url={block.format?.original_url}
-              block
-              className={blockId}
-            />
-          )
-        default:
-          if (process.env.NODE_ENV !== 'production') {
-            console.log(
-              `Unsupported external_object_instance domain ${block.format?.domain}: ` +
-                (block as any).type,
-              JSON.stringify(block, null, 2)
-            )
-          }
-
-          return <div />
-      }
+      return <EOI block={block} className={blockId} />
 
     default:
       if (process.env.NODE_ENV !== 'production') {
         console.log(
-          'Unsupported type ' + (block as any).type,
+          'Unsupported block type ' + (block as any).type,
           JSON.stringify(block, null, 2)
         )
       }
 
       return <div />
   }
-
-  return null
 }

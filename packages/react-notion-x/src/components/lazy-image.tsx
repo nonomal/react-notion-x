@@ -1,20 +1,14 @@
-import React from 'react'
-import { LazyImageFull, ImageState } from 'react-lazy-images'
+import { normalizeUrl } from 'notion-utils'
+import * as React from 'react'
+import { ImageState, LazyImageFull } from 'react-lazy-images'
+
 import { useNotionContext } from '../context'
 import { cs } from '../utils'
 
 /**
  * Progressive, lazy images modeled after Medium's LQIP technique.
  */
-export const LazyImage: React.FC<{
-  src?: string
-  alt?: string
-  className?: string
-  style?: React.CSSProperties
-  height?: number
-  zoomable?: boolean
-  priority?: boolean
-}> = ({
+export function LazyImage({
   src,
   alt,
   className,
@@ -23,12 +17,22 @@ export const LazyImage: React.FC<{
   priority = false,
   height,
   ...rest
-}) => {
+}: {
+  src?: string
+  alt?: string
+  className?: string
+  style?: React.CSSProperties
+  height?: number
+  zoomable?: boolean
+  priority?: boolean
+}) {
   const { recordMap, zoom, previewImages, forceCustomImages, components } =
     useNotionContext()
-
   const zoomRef = React.useRef(zoom ? zoom.clone() : null)
-  const previewImage = previewImages ? recordMap?.preview_images?.[src] : null
+  const previewImage = previewImages
+    ? (recordMap?.preview_images?.[src!] ??
+      recordMap?.preview_images?.[normalizeUrl(src)])
+    : null
 
   const onLoad = React.useCallback(
     (e: any) => {
@@ -38,7 +42,7 @@ export const LazyImage: React.FC<{
         }
       }
     },
-    [zoomRef]
+    [zoomRef, zoomable]
   )
 
   const attachZoom = React.useCallback(
@@ -58,11 +62,11 @@ export const LazyImage: React.FC<{
   if (previewImage) {
     const aspectRatio = previewImage.originalHeight / previewImage.originalWidth
 
-    if (components.image) {
+    if (components.Image) {
       // TODO: could try using next/image onLoadComplete to replace LazyImageFull
       // while retaining our blur implementation
       return (
-        <components.image
+        <components.Image
           src={src}
           alt={alt}
           style={style}
@@ -78,7 +82,8 @@ export const LazyImage: React.FC<{
     }
 
     return (
-      <LazyImageFull src={src} {...rest} experimentalDecode={true}>
+      // @ts-expect-error LazyImage types are out-of-date.
+      <LazyImageFull src={src!} {...rest} experimentalDecode={true}>
         {({ imageState, ref }) => {
           const isLoaded = imageState === ImageState.LoadSuccess
           const wrapperStyle: React.CSSProperties = {
@@ -139,15 +144,15 @@ export const LazyImage: React.FC<{
       the ass. If we have a preview image, then this works fine since we know the
       dimensions ahead of time, but if we don't, then next/image won't display
       anything.
-      
-      Since next/image is the most common use case for using custom images, and this 
+
+      Since next/image is the most common use case for using custom images, and this
       is likely to trip people up, we're disabling non-preview custom images for now.
 
       If you have a use case that is affected by this, please open an issue on github.
     */
-    if (components.image && forceCustomImages) {
+    if (components.Image && forceCustomImages) {
       return (
-        <components.image
+        <components.Image
           src={src}
           alt={alt}
           className={className}

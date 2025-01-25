@@ -1,10 +1,15 @@
-import got, { OptionsOfJSONResponseBody } from 'got'
+// import { promises as fs } from 'fs'
+import type * as notion from 'notion-types'
+import ky, { type Options as KyOptions } from 'ky'
+import {
+  getBlockCollectionId,
+  getPageContentBlockIds,
+  parsePageId,
+  uuidToId
+} from 'notion-utils'
 import pMap from 'p-map'
 
-import { parsePageId, getPageContentBlockIds, uuidToId } from 'notion-utils'
-import * as notion from 'notion-types'
-
-import * as types from './types'
+import type * as types from './types'
 
 /**
  * Main Notion API client.
@@ -14,40 +19,54 @@ export class NotionAPI {
   private readonly _authToken?: string
   private readonly _activeUser?: string
   private readonly _userTimeZone: string
+  private readonly _kyOptions?: KyOptions
 
   constructor({
     apiBaseUrl = 'https://www.notion.so/api/v3',
     authToken,
     activeUser,
-    userTimeZone = 'America/New_York'
+    userTimeZone = 'America/New_York',
+    kyOptions
   }: {
     apiBaseUrl?: string
     authToken?: string
     userLocale?: string
     userTimeZone?: string
     activeUser?: string
+    kyOptions?: KyOptions
   } = {}) {
     this._apiBaseUrl = apiBaseUrl
     this._authToken = authToken
     this._activeUser = activeUser
     this._userTimeZone = userTimeZone
+    this._kyOptions = kyOptions
   }
 
   public async getPage(
     pageId: string,
     {
       concurrency = 3,
+      fetchMissingBlocks = true,
       fetchCollections = true,
       signFileUrls = true,
-      gotOptions
+      chunkLimit = 100,
+      chunkNumber = 0,
+      kyOptions
     }: {
       concurrency?: number
+      fetchMissingBlocks?: boolean
       fetchCollections?: boolean
       signFileUrls?: boolean
-      gotOptions?: OptionsOfJSONResponseBody
+      chunkLimit?: number
+      chunkNumber?: number
+      kyOptions?: KyOptions
     } = {}
   ): Promise<notion.ExtendedRecordMap> {
-    const page = await this.getPageRaw(pageId, gotOptions)
+    const page = await this.getPageRaw(pageId, {
+      chunkLimit,
+      chunkNumber,
+      kyOptions
+    })
     const recordMap = page?.recordMap as notion.ExtendedRecordMap
 
     if (!recordMap?.block) {
@@ -64,21 +83,24 @@ export class NotionAPI {
     recordMap.collection_query = {}
     recordMap.signed_urls = {}
 
-    // fetch any missing content blocks
-    while (true) {
-      const pendingBlockIds = getPageContentBlockIds(recordMap).filter(
-        (id) => !recordMap.block[id]
-      )
+    if (fetchMissingBlocks) {
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        // fetch any missing content blocks
+        const pendingBlockIds = getPageContentBlockIds(recordMap).filter(
+          (id) => !recordMap.block[id]
+        )
 
-      if (!pendingBlockIds.length) {
-        break
+        if (!pendingBlockIds.length) {
+          break
+        }
+
+        const newBlocks = await this.getBlocks(pendingBlockIds, kyOptions).then(
+          (res) => res.recordMap.block
+        )
+
+        recordMap.block = { ...recordMap.block, ...newBlocks }
       }
-
-      const newBlocks = await this.getBlocks(pendingBlockIds, gotOptions).then(
-        (res) => res.recordMap.block
-      )
-
-      recordMap.block = { ...recordMap.block, ...newBlocks }
     }
 
     const contentBlockIds = getPageContentBlockIds(recordMap)
@@ -89,16 +111,20 @@ export class NotionAPI {
     // Notion page is readily available for use cases involving server-side rendering
     // and edge caching.
     if (fetchCollections) {
-      const allCollectionInstances = contentBlockIds.flatMap((blockId) => {
-        const block = recordMap.block[blockId].value
-
-        if (
+      const allCollectionInstances: Array<{
+        collectionId: string
+        collectionViewId: string
+      }> = contentBlockIds.flatMap((blockId) => {
+        const block = recordMap.block[blockId]?.value
+        const collectionId =
           block &&
           (block.type === 'collection_view' ||
-            block.type === 'collection_view_page')
-        ) {
-          return block.view_ids.map((collectionViewId) => ({
-            collectionId: block.collection_id,
+            block.type === 'collection_view_page') &&
+          getBlockCollectionId(block, recordMap)
+
+        if (collectionId) {
+          return block.view_ids?.map((collectionViewId) => ({
+            collectionId,
             collectionViewId
           }))
         } else {
@@ -120,7 +146,7 @@ export class NotionAPI {
               collectionViewId,
               collectionView,
               {
-                gotOptions
+                kyOptions
               }
             )
 
@@ -153,10 +179,11 @@ export class NotionAPI {
               ...recordMap.collection_query![collectionId],
               [collectionViewId]: (collectionData.result as any)?.reducerResults
             }
-          } catch (err) {
+          } catch (err: any) {
             // It's possible for public pages to link to private collections, in which case
             // Notion returns a 400 error
-            console.warn('NotionAPI collectionQuery error', err.message)
+            console.warn('NotionAPI collectionQuery error', pageId, err.message)
+            console.error(err)
           }
         },
         {
@@ -170,7 +197,7 @@ export class NotionAPI {
     // because it is preferable for many use cases as opposed to making these API calls
     // lazily from the client-side.
     if (signFileUrls) {
-      await this.addSignedUrls({ recordMap, contentBlockIds, gotOptions })
+      await this.addSignedUrls({ recordMap, contentBlockIds, kyOptions })
     }
 
     return recordMap
@@ -179,11 +206,11 @@ export class NotionAPI {
   public async addSignedUrls({
     recordMap,
     contentBlockIds,
-    gotOptions = {}
+    kyOptions = {}
   }: {
     recordMap: notion.ExtendedRecordMap
     contentBlockIds?: string[]
-    gotOptions?: OptionsOfJSONResponseBody
+    kyOptions?: KyOptions
   }) {
     recordMap.signed_urls = {}
 
@@ -192,7 +219,7 @@ export class NotionAPI {
     }
 
     const allFileInstances = contentBlockIds.flatMap((blockId) => {
-      const block = recordMap.block[blockId].value
+      const block = recordMap.block[blockId]?.value
 
       if (
         block &&
@@ -210,17 +237,20 @@ export class NotionAPI {
         // console.log(block, source)
 
         if (source) {
-          if (source.indexOf('youtube') >= 0 || source.indexOf('vimeo') >= 0) {
-            return []
+          if (
+            source.includes('secure.notion-static.com') ||
+            source.includes('prod-files-secure')
+          ) {
+            return {
+              permissionRecord: {
+                table: 'block',
+                id: block.id
+              },
+              url: source
+            }
           }
 
-          return {
-            permissionRecord: {
-              table: 'block',
-              id: block.id
-            },
-            url: source
-          }
+          return []
         }
       }
 
@@ -231,15 +261,18 @@ export class NotionAPI {
       try {
         const { signedUrls } = await this.getSignedFileUrls(
           allFileInstances,
-          gotOptions
+          kyOptions
         )
 
         if (signedUrls.length === allFileInstances.length) {
-          for (let i = 0; i < allFileInstances.length; ++i) {
-            const file = allFileInstances[i]
+          for (const [i, file] of allFileInstances.entries()) {
             const signedUrl = signedUrls[i]
+            if (!signedUrl) continue
 
-            recordMap.signed_urls[file.permissionRecord.id] = signedUrl
+            const blockId = file.permissionRecord.id
+            if (!blockId) continue
+
+            recordMap.signed_urls[blockId] = signedUrl
           }
         }
       } catch (err) {
@@ -250,7 +283,15 @@ export class NotionAPI {
 
   public async getPageRaw(
     pageId: string,
-    gotOptions?: OptionsOfJSONResponseBody
+    {
+      kyOptions,
+      chunkLimit = 100,
+      chunkNumber = 0
+    }: {
+      chunkLimit?: number
+      chunkNumber?: number
+      kyOptions?: KyOptions
+    } = {}
   ) {
     const parsedPageId = parsePageId(pageId)
 
@@ -260,16 +301,16 @@ export class NotionAPI {
 
     const body = {
       pageId: parsedPageId,
-      limit: 100,
+      limit: chunkLimit,
+      chunkNumber,
       cursor: { stack: [] },
-      chunkNumber: 0,
       verticalColumns: false
     }
 
     return this.fetch<notion.PageChunk>({
       endpoint: 'loadPageChunk',
       body,
-      gotOptions
+      kyOptions
     })
   }
 
@@ -282,7 +323,7 @@ export class NotionAPI {
       searchQuery = '',
       userTimeZone = this._userTimeZone,
       loadContentCover = true,
-      gotOptions
+      kyOptions
     }: {
       type?: notion.CollectionViewType
       limit?: number
@@ -290,14 +331,32 @@ export class NotionAPI {
       userTimeZone?: string
       userLocale?: string
       loadContentCover?: boolean
-      gotOptions?: OptionsOfJSONResponseBody
+      kyOptions?: KyOptions
     } = {}
   ) {
     const type = collectionView?.type
     const isBoardType = type === 'board'
-    const groupBy =
-      collectionView?.format?.board_columns_by ||
-      collectionView?.format?.collection_group_by
+    const groupBy = isBoardType
+      ? collectionView?.format?.board_columns_by
+      : collectionView?.format?.collection_group_by
+
+    let filters = []
+    if (collectionView?.format?.property_filters) {
+      filters = collectionView.format?.property_filters.map(
+        (filterObj: any) => {
+          //get the inner filter
+          return {
+            filter: filterObj?.filter?.filter,
+            property: filterObj?.filter?.property
+          }
+        }
+      )
+    }
+
+    //Fixes formula filters from not working
+    if (collectionView?.query2?.filter?.filters) {
+      filters.push(...collectionView.query2.filter.filters)
+    }
 
     let loader: any = {
       type: 'reducer',
@@ -308,7 +367,12 @@ export class NotionAPI {
           loadContentCover
         }
       },
+      sort: [],
       ...collectionView?.query2,
+      filter: {
+        filters,
+        operator: 'and'
+      },
       searchQuery,
       userTimeZone
     }
@@ -326,15 +390,16 @@ export class NotionAPI {
         select: 'enum_is',
         multi_select: 'enum_contains',
         created_time: 'date_is_within',
-        ['undefined']: 'is_empty'
+        undefined: 'is_empty'
       }
 
-      const reducersQuery = {}
+      const reducersQuery: Record<string, any> = {}
       for (const group of groups) {
         const {
           property,
           value: { value, type }
         } = group
+
         for (const iterator of iterators) {
           const iteratorProps =
             iterator === 'results'
@@ -349,14 +414,14 @@ export class NotionAPI {
                   }
                 }
 
-          const isUncategorizedValue = typeof value === 'undefined'
+          const isUncategorizedValue = value === undefined
           const isDateValue = value?.range
           // TODO: review dates reducers
           const queryLabel = isUncategorizedValue
             ? 'uncategorized'
             : isDateValue
-            ? value.range?.start_date || value.range?.end_date
-            : value?.value || value
+              ? value.range?.start_date || value.range?.end_date
+              : value?.value || value
 
           const queryValue =
             !isUncategorizedValue && (isDateValue || value?.value || value)
@@ -370,7 +435,7 @@ export class NotionAPI {
                   property,
                   filter: {
                     operator: !isUncategorizedValue
-                      ? operators[type]
+                      ? operators[type as keyof typeof operators]
                       : 'is_empty',
                     ...(!isUncategorizedValue && {
                       value: {
@@ -396,16 +461,37 @@ export class NotionAPI {
             ...(collectionView?.query2?.filter && {
               filter: collectionView?.query2?.filter
             }),
-            groupSortPreference: groups.map((group) => group?.value),
+            groupSortPreference: groups.map((group: any) => group?.value),
             limit
           },
           ...reducersQuery
         },
         ...collectionView?.query2,
         searchQuery,
-        userTimeZone
+        userTimeZone,
+        //TODO: add filters here
+        filter: {
+          filters,
+          operator: 'and'
+        }
       }
     }
+
+    // if (isBoardType) {
+    //   console.log(
+    //     JSON.stringify(
+    //       {
+    //         collectionId,
+    //         collectionViewId,
+    //         loader,
+    //         groupBy: groupBy || 'NONE',
+    //         collectionViewQuery: collectionView.query2 || 'NONE'
+    //       },
+    //       null,
+    //       2
+    //     )
+    //   )
+    // }
 
     return this.fetch<notion.CollectionInstance>({
       endpoint: 'queryCollection',
@@ -418,27 +504,21 @@ export class NotionAPI {
         },
         loader
       },
-      gotOptions
+      kyOptions
     })
   }
 
-  public async getUsers(
-    userIds: string[],
-    gotOptions?: OptionsOfJSONResponseBody
-  ) {
+  public async getUsers(userIds: string[], kyOptions?: KyOptions) {
     return this.fetch<notion.RecordValues<notion.User>>({
       endpoint: 'getRecordValues',
       body: {
         requests: userIds.map((id) => ({ id, table: 'notion_user' }))
       },
-      gotOptions
+      kyOptions
     })
   }
 
-  public async getBlocks(
-    blockIds: string[],
-    gotOptions?: OptionsOfJSONResponseBody
-  ) {
+  public async getBlocks(blockIds: string[], kyOptions?: KyOptions) {
     return this.fetch<notion.PageChunk>({
       endpoint: 'syncRecordValues',
       body: {
@@ -449,67 +529,70 @@ export class NotionAPI {
           version: -1
         }))
       },
-      gotOptions
+      kyOptions
     })
   }
 
   public async getSignedFileUrls(
     urls: types.SignedUrlRequest[],
-    gotOptions?: OptionsOfJSONResponseBody
+    kyOptions?: KyOptions
   ) {
     return this.fetch<types.SignedUrlResponse>({
       endpoint: 'getSignedFileUrls',
       body: {
         urls
       },
-      gotOptions
+      kyOptions
     })
   }
 
-  public async search(
-    params: notion.SearchParams,
-    gotOptions?: OptionsOfJSONResponseBody
-  ) {
+  public async search(params: notion.SearchParams, kyOptions?: KyOptions) {
+    const body = {
+      type: 'BlocksInAncestor',
+      source: 'quick_find_public',
+      ancestorId: parsePageId(params.ancestorId),
+      sort: {
+        field: 'relevance'
+      },
+      limit: params.limit || 20,
+      query: params.query,
+      filters: {
+        isDeletedOnly: false,
+        isNavigableOnly: false,
+        excludeTemplates: true,
+        requireEditPermissions: false,
+        includePublicPagesWithoutExplicitAccess: true,
+        ancestors: [],
+        createdBy: [],
+        editedBy: [],
+        lastEditedTime: {},
+        createdTime: {},
+        ...params.filters
+      }
+    }
+
     return this.fetch<notion.SearchResults>({
       endpoint: 'search',
-      body: {
-        type: 'BlocksInAncestor',
-        source: 'quick_find_public',
-        ancestorId: parsePageId(params.ancestorId),
-        sort: 'Relevance',
-        limit: params.limit || 20,
-        query: params.query,
-        filters: {
-          isDeletedOnly: false,
-          excludeTemplates: true,
-          isNavigableOnly: true,
-          requireEditPermissions: false,
-          ancestors: [],
-          createdBy: [],
-          editedBy: [],
-          lastEditedTime: {},
-          createdTime: {},
-          ...params.filters
-        }
-      },
-      gotOptions
+      body,
+      kyOptions
     })
   }
 
   public async fetch<T>({
     endpoint,
     body,
-    gotOptions,
+    kyOptions,
     headers: clientHeaders
   }: {
     endpoint: string
     body: object
-    gotOptions?: OptionsOfJSONResponseBody
+    kyOptions?: KyOptions
     headers?: any
   }): Promise<T> {
     const headers: any = {
       ...clientHeaders,
-      ...gotOptions?.headers,
+      ...this._kyOptions?.headers,
+      ...kyOptions?.headers,
       'Content-Type': 'application/json'
     }
 
@@ -523,21 +606,13 @@ export class NotionAPI {
 
     const url = `${this._apiBaseUrl}/${endpoint}`
 
-    return got
+    return ky
       .post(url, {
-        ...gotOptions,
+        ...this._kyOptions,
+        ...kyOptions,
         json: body,
         headers
       })
-      .json()
-
-    // return fetch(url, {
-    //   method: 'post',
-    //   body: JSON.stringify(body),
-    //   headers
-    // }).then((res) => {
-    //   console.log(endpoint, res)
-    //   return res.json()
-    // })
+      .json<T>()
   }
 }

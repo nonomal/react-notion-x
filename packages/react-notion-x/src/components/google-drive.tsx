@@ -1,15 +1,17 @@
-import React from 'react'
-import { GoogleDriveBlock } from 'notion-types'
-import { formatDistance } from 'date-fns'
+import type * as React from 'react'
+import { type GoogleDriveBlock } from 'notion-types'
 
 import { useNotionContext } from '../context'
 import { cs } from '../utils'
 import { GracefulImage } from './graceful-image'
 
-export const GoogleDrive: React.FC<{
+export function GoogleDrive({
+  block,
+  className
+}: {
   block: GoogleDriveBlock
   className?: string
-}> = ({ block, className }) => {
+}) {
   const { components, mapImageUrl } = useNotionContext()
   const properties = block.format?.drive_properties
   if (!properties) return null
@@ -18,13 +20,13 @@ export const GoogleDrive: React.FC<{
   try {
     const url = new URL(properties.url)
     domain = url.hostname
-  } catch (err) {
+  } catch {
     // ignore invalid urls for robustness
   }
 
   return (
     <div className={cs('notion-google-drive', className)}>
-      <components.link
+      <components.Link
         className='notion-google-drive-link'
         href={properties.url}
         target='_blank'
@@ -32,7 +34,7 @@ export const GoogleDrive: React.FC<{
       >
         <div className='notion-google-drive-preview'>
           <GracefulImage
-            src={mapImageUrl(properties.thumbnail, block)}
+            src={mapImageUrl(properties.thumbnail, block)!}
             alt={properties.title || 'Google Drive Document'}
             loading='lazy'
           />
@@ -45,17 +47,14 @@ export const GoogleDrive: React.FC<{
             </div>
           )}
 
-          {properties.modified_time && (
+          {/* TODO: re-add last modified time with alternative to timeago.js */}
+          {/* {properties.modified_time && (
             <div className='notion-google-drive-body-modified-time'>
               Last modified{' '}
               {properties.user_name ? `by ${properties.user_name} ` : ''}
-              {formatDistance(
-                new Date(properties.modified_time),
-                new Date()
-              )}{' '}
-              ago
+              {timeago(properties.modified_time)}
             </div>
-          )}
+          )} */}
 
           {properties.icon && domain && (
             <div className='notion-google-drive-body-source'>
@@ -76,7 +75,7 @@ export const GoogleDrive: React.FC<{
             </div>
           )}
         </div>
-      </components.link>
+      </components.Link>
     </div>
   )
 }

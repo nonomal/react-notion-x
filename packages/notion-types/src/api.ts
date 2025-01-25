@@ -1,4 +1,4 @@
-import { RecordMap } from './maps'
+import { type RecordMap } from './maps'
 
 // API types
 // ----------------------------------------------------------------------------
@@ -17,6 +17,7 @@ export interface SearchParams {
     requireEditPermissions: boolean
   }
   limit?: number
+  searchSessionId?: string
 }
 
 export interface SearchResults {

@@ -1,4 +1,9 @@
-import { Block, DateFormat, ExtendedRecordMap } from 'notion-types'
+import {
+  type Block,
+  type DateFormat,
+  type ExtendedRecordMap
+} from 'notion-types'
+
 import { getTextContent } from './get-text-content'
 
 /**
@@ -22,57 +27,76 @@ export function getPageProperty(
   block: Block,
   recordMap: ExtendedRecordMap
 ) {
-  if (!block.properties || !Object.keys(recordMap.collection)) {
-    throw new Error(
-      `this block ${block.id} has not properties or this recordMap has no collection record`
-    )
-  }
-
-  const collection = recordMap.collection[block.parent_id]?.value
-
-  if (collection) {
-    const propertyId = Object.keys(collection.schema).find(
-      (key) => collection.schema[key]?.name === propertyName
-    )
-
-    if (!propertyId) {
+  try {
+    if (!block.properties || !Object.keys(recordMap.collection)) {
+      // console.warn(
+      //   `block ${block.id} has no properties or this recordMap has no collection record`
+      // )
       return null
     }
 
-    const { type } = collection.schema[propertyId]
-    const content = getTextContent(block.properties[propertyId])
+    const collection = recordMap.collection[block.parent_id]?.value
 
-    switch (type) {
-      case 'created_time':
-        return block.created_time
-      case 'multi_select':
-        return content.split(',')
-      case 'date':
-        const property = block.properties[propertyId] as [['‣', [DateFormat]]]
-        const formatDate = property[0][1][0][1]
-        if (formatDate.type == 'datetime') {
-          return new Date(
-            `${formatDate.start_date} ${formatDate.start_time}`
-          ).getTime()
-        } else if (formatDate.type == 'date') {
-          return new Date(formatDate.start_date).getTime()
-        } else if (formatDate.type == 'datetimerange') {
-          const { start_date, start_time, end_date, end_time } = formatDate
-          const startTime = new Date(`${start_date} ${start_time}`).getTime()
-          const endTime = new Date(`${end_date} ${end_time}`).getTime()
-          return [startTime, endTime]
-        } else {
-          const startTime = new Date(formatDate.start_date).getTime()
-          const endTime = new Date(formatDate.end_date).getTime()
-          return [startTime, endTime]
+    if (collection) {
+      const propertyNameL = propertyName.toLowerCase()
+      const propertyId = Object.keys(collection.schema).find(
+        (key) => collection.schema[key]?.name?.toLowerCase() === propertyNameL
+      )
+
+      if (!propertyId) {
+        return null
+      }
+
+      const s = collection.schema[propertyId]
+      if (!s) {
+        return null
+      }
+
+      const { type } = s
+      const content = getTextContent(block.properties[propertyId])
+
+      switch (type) {
+        case 'created_time':
+          return block.created_time
+
+        case 'multi_select':
+          return content.split(',')
+
+        case 'date': {
+          const property = block.properties[propertyId] as [['‣', [DateFormat]]]
+          const formatDate = property[0][1][0][1]
+
+          if (formatDate.type === 'datetime') {
+            return new Date(
+              `${formatDate.start_date} ${formatDate.start_time}`
+            ).getTime()
+          } else if (formatDate.type === 'date') {
+            return new Date(formatDate.start_date).getTime()
+          } else if (formatDate.type === 'datetimerange') {
+            const { start_date, start_time, end_date, end_time } = formatDate
+            const startTime = new Date(`${start_date} ${start_time}`).getTime()
+            const endTime = new Date(`${end_date} ${end_time}`).getTime()
+            return [startTime, endTime]
+          } else {
+            const startTime = new Date(formatDate.start_date).getTime()
+            const endTime = new Date(formatDate.end_date!).getTime()
+            return [startTime, endTime]
+          }
         }
-      case 'checkbox':
-        return content == 'Yes'
-      case 'last_edited_time':
-        return block.last_edited_time
-      default:
-        return content
+
+        case 'checkbox':
+          return content === 'Yes'
+
+        case 'last_edited_time':
+          return block.last_edited_time
+
+        default:
+          return content
+      }
     }
+  } catch {
+    // ensure that no matter what, we don't throw errors because of an unexpected
+    // collection data format
   }
 
   return null
